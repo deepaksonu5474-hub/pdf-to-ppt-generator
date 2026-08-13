@@ -4,6 +4,7 @@ from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.enum.text import PP_ALIGN
 from PIL import Image
+import pytesseract
 import io
 import os
 
@@ -14,7 +15,7 @@ st.set_page_config(
 )
 
 st.title("📄 PDF to Editable PPT Generator")
-st.write("Convert PDF, DOC, DOCX and Images into PowerPoint.")
+st.write("Convert PDF and Images into editable PowerPoint.")
 
 st.divider()
 
@@ -22,8 +23,6 @@ uploaded_file = st.file_uploader(
     "Upload your file",
     type=[
         "pdf",
-        "doc",
-        "docx",
         "png",
         "jpg",
         "jpeg",
@@ -39,12 +38,12 @@ if uploaded_file:
     st.success(f"File selected: {file_name}")
 
     if st.button(
-        "🚀 Generate PowerPoint",
+        "🚀 Generate Editable PowerPoint",
         type="primary"
     ):
 
         with st.spinner(
-            "Reading file and creating PowerPoint..."
+            "Reading file and creating editable PPT..."
         ):
 
             file_bytes = uploaded_file.read()
@@ -55,11 +54,103 @@ if uploaded_file:
             prs.slide_width = Inches(13.333)
             prs.slide_height = Inches(7.5)
 
-            # ------------------------------------------------
-            # PDF
-            # ------------------------------------------------
+            # ============================================
+            # IMAGE → OCR → EDITABLE TEXT
+            # ============================================
 
-            if file_ext == ".pdf":
+            if file_ext in [
+                ".png",
+                ".jpg",
+                ".jpeg",
+                ".webp"
+            ]:
+
+                image = Image.open(
+                    io.BytesIO(file_bytes)
+                )
+
+                # Convert to RGB
+                image = image.convert("RGB")
+
+                slide = prs.slides.add_slide(
+                    prs.slide_layouts[6]
+                )
+
+                # OCR
+                ocr_data = pytesseract.image_to_data(
+                    image,
+                    lang="hin+eng",
+                    output_type=pytesseract.Output.DICT
+                )
+
+                img_width, img_height = image.size
+
+                for i in range(
+                    len(ocr_data["text"])
+                ):
+
+                    text = ocr_data["text"][i].strip()
+
+                    if not text:
+                        continue
+
+                    confidence = float(
+                        ocr_data["conf"][i]
+                    )
+
+                    if confidence < 30:
+                        continue
+
+                    x = ocr_data["left"][i]
+                    y = ocr_data["top"][i]
+                    w = ocr_data["width"][i]
+                    h = ocr_data["height"][i]
+
+                    left = Inches(
+                        (x / img_width) * 13.333
+                    )
+
+                    top = Inches(
+                        (y / img_height) * 7.5
+                    )
+
+                    width = Inches(
+                        (w / img_width) * 13.333
+                    )
+
+                    height = Inches(
+                        (h / img_height) * 7.5
+                    )
+
+                    textbox = slide.shapes.add_textbox(
+                        left,
+                        top,
+                        width,
+                        height
+                    )
+
+                    text_frame = textbox.text_frame
+                    text_frame.clear()
+
+                    paragraph = (
+                        text_frame.paragraphs[0]
+                    )
+
+                    run = paragraph.add_run()
+
+                    run.text = text
+
+                    run.font.size = Pt(16)
+
+                    paragraph.alignment = (
+                        PP_ALIGN.LEFT
+                    )
+
+            # ============================================
+            # PDF → EDITABLE TEXT
+            # ============================================
+
+            elif file_ext == ".pdf":
 
                 pdf = fitz.open(
                     stream=file_bytes,
@@ -75,7 +166,9 @@ if uploaded_file:
                     page_width = page.rect.width
                     page_height = page.rect.height
 
-                    blocks = page.get_text("blocks")
+                    blocks = page.get_text(
+                        "blocks"
+                    )
 
                     for block in blocks:
 
@@ -112,88 +205,23 @@ if uploaded_file:
                         text_frame = textbox.text_frame
                         text_frame.clear()
 
-                        p = text_frame.paragraphs[0]
+                        paragraph = (
+                            text_frame.paragraphs[0]
+                        )
 
-                        run = p.add_run()
+                        run = paragraph.add_run()
+
                         run.text = text
 
                         run.font.size = Pt(16)
 
-                        p.alignment = PP_ALIGN.LEFT
+                        paragraph.alignment = (
+                            PP_ALIGN.LEFT
+                        )
 
-            # ------------------------------------------------
-            # IMAGE
-            # ------------------------------------------------
-
-            elif file_ext in [
-                ".png",
-                ".jpg",
-                ".jpeg",
-                ".webp"
-            ]:
-
-                slide = prs.slides.add_slide(
-                    prs.slide_layouts[6]
-                )
-
-                image = Image.open(
-                    io.BytesIO(file_bytes)
-                )
-
-                image_buffer = io.BytesIO()
-
-                image.convert("RGB").save(
-                    image_buffer,
-                    format="PNG"
-                )
-
-                image_buffer.seek(0)
-
-                slide.shapes.add_picture(
-                    image_buffer,
-                    0,
-                    0,
-                    width=prs.slide_width,
-                    height=prs.slide_height
-                )
-
-            # ------------------------------------------------
-            # DOC / DOCX
-            # ------------------------------------------------
-
-            elif file_ext in [
-                ".doc",
-                ".docx"
-            ]:
-
-                slide = prs.slides.add_slide(
-                    prs.slide_layouts[6]
-                )
-
-                textbox = slide.shapes.add_textbox(
-                    Inches(0.5),
-                    Inches(0.5),
-                    Inches(12.3),
-                    Inches(6.5)
-                )
-
-                text_frame = textbox.text_frame
-
-                text_frame.text = (
-                    "DOC/DOCX file uploaded successfully.\n\n"
-                    "DOC/DOCX → Editable PPT conversion "
-                    "will be added in the next version."
-                )
-
-                for paragraph in text_frame.paragraphs:
-
-                    for run in paragraph.runs:
-
-                        run.font.size = Pt(20)
-
-            # ------------------------------------------------
+            # ============================================
             # SAVE PPT
-            # ------------------------------------------------
+            # ============================================
 
             output = io.BytesIO()
 
@@ -202,13 +230,13 @@ if uploaded_file:
             output.seek(0)
 
         st.success(
-            "✅ PowerPoint created successfully!"
+            "✅ Editable PowerPoint created!"
         )
 
         st.download_button(
-            label="⬇️ Download PowerPoint",
+            label="⬇️ Download Editable PowerPoint",
             data=output,
-            file_name="converted_presentation.pptx",
+            file_name="editable_presentation.pptx",
             mime=(
                 "application/vnd.openxmlformats-officedocument."
                 "presentationml.presentation"
